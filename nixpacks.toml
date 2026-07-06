@@ -1,10 +1,10 @@
 providers = ["php"]
 
 [phases.setup]
-nixPkgs = ["php82", "php82Extensions.mbstring", "php82Extensions.xml", "php82Extensions.pdo", "php82Extensions.pdo_mysql", "php82Extensions.tokenizer", "php82Extensions.curl", "php82Extensions.openssl", "php82Extensions.bcmath", "php82Extensions.gd", "php82Extensions.zip", "composer"]
+nixPkgs = ["php80", "php80Extensions.mbstring", "php80Extensions.xml", "php80Extensions.pdo", "php80Extensions.pdo_mysql", "php80Extensions.tokenizer", "php80Extensions.curl", "php80Extensions.openssl", "php80Extensions.bcmath", "php80Extensions.gd", "php80Extensions.zip", "composer"]
 
 [phases.install]
-cmds = ["composer install --no-dev --optimize-autoloader --ignore-platform-reqs"]
+cmds = ["composer install --no-dev --optimize-autoloader"]
 
 [phases.build]
 cmds = []
