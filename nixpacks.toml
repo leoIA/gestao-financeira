@@ -1,8 +1,5 @@
-[variables]
-COMPOSER_NO_AUDIT = "1"
-
 [phases.install]
-cmds = ["composer install --no-dev --optimize-autoloader"]
+cmds = ["COMPOSER_NO_AUDIT=1 composer install --no-dev --optimize-autoloader --no-audit"]
 
 [phases.build]
 cmds = []
