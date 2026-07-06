@@ -56,3 +56,6 @@ https://financeiro.ilab4.me
 ### 📄 Licença
 
 Este projeto está sob a licença MIT
+
+
+<!-- deploy trigger -->
