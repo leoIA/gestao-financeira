@@ -1,8 +1,2 @@
-[phases.install]
-cmds = ["COMPOSER_NO_AUDIT=1 composer install --no-dev --optimize-autoloader --no-audit"]
-
-[phases.build]
-cmds = []
-
 [start]
 cmd = "php artisan serve --host=0.0.0.0 --port=$PORT"
