@@ -13,8 +13,17 @@ function killPort(port) {
   try { execSync('pkill -f "php.*' + port + '" 2>/dev/null || true', { stdio: 'ignore' }); } catch(e) {}
 }
 
-// Find PHP binary - prefer php81
+// Find PHP binary - check .php_path file first (written by nixpacks build), then fallback
 function findPhp() {
+  // Try to read PHP path saved during build
+  const phpPathFile = path.join(APP_DIR, '.php_path');
+  if (fs.existsSync(phpPathFile)) {
+    const saved = fs.readFileSync(phpPathFile, 'utf8').trim();
+    if (saved) {
+      try { execSync(saved + ' -v', { stdio: 'ignore' }); console.log('Using saved PHP path:', saved); return saved; } catch(e) {}
+    }
+  }
+  // Fallback search
   const candidates = ['/usr/bin/php81', '/usr/bin/php8.1', '/usr/bin/php82', '/usr/bin/php8.2', '/usr/bin/php80', '/usr/bin/php', 'php81', 'php'];
   for (const p of candidates) {
     try { execSync(p + ' -v', { stdio: 'ignore' }); console.log('Found PHP:', p); return p; } catch(e) {}
@@ -24,6 +33,7 @@ function findPhp() {
 
 const phpBin = findPhp();
 console.log('PHP binary:', phpBin);
+try { console.log('PHP version:', execSync(phpBin + ' -r "echo PHP_VERSION;"', { encoding: 'utf8' })); } catch(e) {}
 
 // Kill any existing PHP processes on the port
 killPort(PHP_PORT);
