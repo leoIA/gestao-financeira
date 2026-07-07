@@ -5,31 +5,19 @@ const fs = require('fs');
 
 const PORT = parseInt(process.env.PORT) || 3000;
 const APP_DIR = __dirname;
-
-// Find a free port for PHP
-function findFreePort(start) {
-  for (let p = start; p < start + 100; p++) {
-    try {
-      execSync('fuser ' + p + '/tcp', { stdio: 'ignore' });
-      // port in use, try next
-    } catch(e) {
-      return p; // fuser returns error if port is free
-    }
-  }
-  return start;
-}
+const PHP_PORT = 8765;
 
 // Kill process on port
 function killPort(port) {
-  try { execSync('fuser -k ' + port + '/tcp', { stdio: 'ignore' }); } catch(e) {}
-  try { execSync('pkill -f "php.*' + port + '"', { stdio: 'ignore' }); } catch(e) {}
+  try { execSync('fuser -k ' + port + '/tcp 2>/dev/null || true', { stdio: 'ignore' }); } catch(e) {}
+  try { execSync('pkill -f "php.*' + port + '" 2>/dev/null || true', { stdio: 'ignore' }); } catch(e) {}
 }
 
-// Find PHP binary
+// Find PHP binary - prefer php81
 function findPhp() {
-  const candidates = ['/usr/bin/php83', '/usr/bin/php8.3', '/usr/bin/php82', '/usr/bin/php8.1', '/usr/bin/php', 'php83', 'php'];
+  const candidates = ['/usr/bin/php81', '/usr/bin/php8.1', '/usr/bin/php82', '/usr/bin/php8.2', '/usr/bin/php80', '/usr/bin/php', 'php81', 'php'];
   for (const p of candidates) {
-    try { execSync(p + ' -v', { stdio: 'ignore' }); return p; } catch(e) {}
+    try { execSync(p + ' -v', { stdio: 'ignore' }); console.log('Found PHP:', p); return p; } catch(e) {}
   }
   return 'php';
 }
@@ -37,12 +25,8 @@ function findPhp() {
 const phpBin = findPhp();
 console.log('PHP binary:', phpBin);
 
-// Kill any existing PHP on common ports
-killPort(8765);
-killPort(8766);
-killPort(9000);
-
-const PHP_PORT = 8765;
+// Kill any existing PHP processes on the port
+killPort(PHP_PORT);
 
 // Build .env from Hostinger env vars
 const envFile = path.join(APP_DIR, '.env');
@@ -67,7 +51,7 @@ const envVars = {
 };
 
 fs.writeFileSync(envFile, Object.entries(envVars).map(([k,v]) => k+'='+v).join('\n') + '\n');
-console.log('.env written with APP_KEY:', envVars.APP_KEY ? 'set' : 'empty');
+console.log('.env written, APP_KEY:', envVars.APP_KEY ? 'SET' : 'EMPTY');
 
 // Generate APP_KEY if missing
 try {
@@ -83,7 +67,7 @@ try {
 try { execSync('chmod -R 777 ' + path.join(APP_DIR, 'storage') + ' ' + path.join(APP_DIR, 'bootstrap/cache')); } catch(e) {}
 
 // Clear config cache
-try { execSync(phpBin + ' ' + path.join(APP_DIR, 'artisan') + ' config:clear --no-interaction', { cwd: APP_DIR }); } catch(e) {}
+try { execSync(phpBin + ' ' + path.join(APP_DIR, 'artisan') + ' config:clear --no-interaction', { cwd: APP_DIR }); } catch(e) { console.error('config:clear error:', e.message); }
 
 // Start PHP built-in server
 console.log('Starting PHP on port', PHP_PORT);
@@ -93,15 +77,19 @@ const phpServer = spawn(phpBin, ['-S', '127.0.0.1:' + PHP_PORT, '-t', path.join(
 });
 phpServer.stdout.on('data', d => process.stdout.write('[PHP] ' + d));
 phpServer.stderr.on('data', d => process.stderr.write('[PHP] ' + d));
-phpServer.on('exit', (code, sig) => {
-  console.error('[PHP] exited code=' + code + ' sig=' + sig);
-});
+phpServer.on('exit', (code, sig) => console.error('[PHP] exited code=' + code + ' sig=' + sig));
 
 // Node.js proxy -> PHP
 setTimeout(() => {
   console.log('Starting Node proxy on', PORT);
   http.createServer((req, res) => {
-    const opts = { hostname: '127.0.0.1', port: PHP_PORT, path: req.url, method: req.method, headers: Object.assign({}, req.headers, { host: '127.0.0.1:' + PHP_PORT }) };
+    const opts = {
+      hostname: '127.0.0.1',
+      port: PHP_PORT,
+      path: req.url,
+      method: req.method,
+      headers: Object.assign({}, req.headers, { host: '127.0.0.1:' + PHP_PORT })
+    };
     const pr = http.request(opts, (pres) => {
       res.writeHead(pres.statusCode, pres.headers);
       pres.pipe(res);
