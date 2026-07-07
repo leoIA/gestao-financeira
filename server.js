@@ -4,14 +4,32 @@ const path = require('path');
 const fs = require('fs');
 
 const PORT = parseInt(process.env.PORT) || 3000;
-const PHP_PORT = 8765;
 const APP_DIR = __dirname;
+
+// Find a free port for PHP
+function findFreePort(start) {
+  for (let p = start; p < start + 100; p++) {
+    try {
+      execSync('fuser ' + p + '/tcp', { stdio: 'ignore' });
+      // port in use, try next
+    } catch(e) {
+      return p; // fuser returns error if port is free
+    }
+  }
+  return start;
+}
+
+// Kill process on port
+function killPort(port) {
+  try { execSync('fuser -k ' + port + '/tcp', { stdio: 'ignore' }); } catch(e) {}
+  try { execSync('pkill -f "php.*' + port + '"', { stdio: 'ignore' }); } catch(e) {}
+}
 
 // Find PHP binary
 function findPhp() {
   const candidates = ['/usr/bin/php83', '/usr/bin/php8.3', '/usr/bin/php82', '/usr/bin/php8.1', '/usr/bin/php', 'php83', 'php'];
   for (const p of candidates) {
-    try { execSync(p + ' -v', { stdio: 'ignore' }); return p; } catch (e) {}
+    try { execSync(p + ' -v', { stdio: 'ignore' }); return p; } catch(e) {}
   }
   return 'php';
 }
@@ -19,7 +37,14 @@ function findPhp() {
 const phpBin = findPhp();
 console.log('PHP binary:', phpBin);
 
-// Build .env from process.env (Hostinger injects env vars)
+// Kill any existing PHP on common ports
+killPort(8765);
+killPort(8766);
+killPort(9000);
+
+const PHP_PORT = 8765;
+
+// Build .env from Hostinger env vars
 const envFile = path.join(APP_DIR, '.env');
 const envVars = {
   APP_NAME: process.env.APP_NAME || 'GestaoFinanceira',
@@ -41,48 +66,51 @@ const envVars = {
   SESSION_LIFETIME: '120'
 };
 
-let envContent = Object.entries(envVars).map(([k, v]) => k + '=' + v).join('\n');
-fs.writeFileSync(envFile, envContent + '\n');
-console.log('.env written');
+fs.writeFileSync(envFile, Object.entries(envVars).map(([k,v]) => k+'='+v).join('\n') + '\n');
+console.log('.env written with APP_KEY:', envVars.APP_KEY ? 'set' : 'empty');
 
 // Generate APP_KEY if missing
 try {
-  const current = fs.readFileSync(envFile, 'utf8');
-  if (!current.match(/APP_KEY=base64:/)) {
+  const cur = fs.readFileSync(envFile, 'utf8');
+  if (!cur.match(/APP_KEY=base64:/)) {
     console.log('Generating APP_KEY...');
     const out = execSync(phpBin + ' ' + path.join(APP_DIR, 'artisan') + ' key:generate --force', { cwd: APP_DIR, encoding: 'utf8' });
-    console.log(out);
+    console.log(out.trim());
   }
 } catch(e) { console.error('APP_KEY error:', e.message); }
 
 // Fix permissions
-try {
-  execSync('chmod -R 777 ' + path.join(APP_DIR, 'storage') + ' ' + path.join(APP_DIR, 'bootstrap/cache'));
-} catch(e) {}
+try { execSync('chmod -R 777 ' + path.join(APP_DIR, 'storage') + ' ' + path.join(APP_DIR, 'bootstrap/cache')); } catch(e) {}
 
 // Clear config cache
-try {
-  execSync(phpBin + ' ' + path.join(APP_DIR, 'artisan') + ' config:clear', { cwd: APP_DIR });
-} catch(e) {}
+try { execSync(phpBin + ' ' + path.join(APP_DIR, 'artisan') + ' config:clear --no-interaction', { cwd: APP_DIR }); } catch(e) {}
 
 // Start PHP built-in server
-const phpServer = spawn(phpBin, ['-S', '127.0.0.1:' + PHP_PORT, '-t', path.join(APP_DIR, 'public'), path.join(APP_DIR, 'public/index.php')], {
+console.log('Starting PHP on port', PHP_PORT);
+const phpServer = spawn(phpBin, ['-S', '127.0.0.1:' + PHP_PORT, '-t', path.join(APP_DIR, 'public')], {
   cwd: APP_DIR,
   env: Object.assign({}, process.env)
 });
 phpServer.stdout.on('data', d => process.stdout.write('[PHP] ' + d));
 phpServer.stderr.on('data', d => process.stderr.write('[PHP] ' + d));
-phpServer.on('exit', code => console.error('[PHP] exited:', code));
+phpServer.on('exit', (code, sig) => {
+  console.error('[PHP] exited code=' + code + ' sig=' + sig);
+});
 
 // Node.js proxy -> PHP
 setTimeout(() => {
+  console.log('Starting Node proxy on', PORT);
   http.createServer((req, res) => {
-    const opts = { hostname: '127.0.0.1', port: PHP_PORT, path: req.url, method: req.method, headers: req.headers };
+    const opts = { hostname: '127.0.0.1', port: PHP_PORT, path: req.url, method: req.method, headers: Object.assign({}, req.headers, { host: '127.0.0.1:' + PHP_PORT }) };
     const pr = http.request(opts, (pres) => {
       res.writeHead(pres.statusCode, pres.headers);
       pres.pipe(res);
     });
-    pr.on('error', e => { res.writeHead(502); res.end('502: ' + e.message); });
+    pr.on('error', e => {
+      console.error('Proxy error:', e.message);
+      res.writeHead(502);
+      res.end('PHP not ready: ' + e.message);
+    });
     req.pipe(pr);
-  }).listen(PORT, '0.0.0.0', () => console.log('Listening on', PORT, '-> PHP', PHP_PORT));
-}, 3000);
+  }).listen(PORT, '0.0.0.0', () => console.log('Listening on', PORT));
+}, 2000);
