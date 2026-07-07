@@ -1,5 +1,12 @@
 [phases.setup]
-nixPkgs = ["php80", "php80Extensions.mbstring", "php80Extensions.xml", "php80Extensions.pdo", "php80Extensions.pdo_mysql", "php80Extensions.pdo_pgsql", "php80Extensions.tokenizer", "php80Extensions.curl", "php80Extensions.openssl", "php80Extensions.bcmath", "php80Extensions.gd", "composer"]
+nixPkgs = ["php83", "php83Extensions.mbstring", "php83Extensions.xml", "php83Extensions.pdo", "php83Extensions.pdo_pgsql", "php83Extensions.tokenizer", "php83Extensions.curl", "php83Extensions.openssl", "php83Extensions.bcmath", "php83Extensions.gd", "php83Extensions.zip", "composer", "nodejs_22", "nodePackages.npm"]
+
+[phases.build]
+cmds = [
+  "composer install --no-dev --no-scripts --no-interaction --optimize-autoloader",
+  "npm install",
+  "npm run production"
+]
 
 [start]
 cmd = "node server.js"
