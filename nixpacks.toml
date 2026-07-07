@@ -3,6 +3,7 @@ nixPkgs = ["php81", "php81Extensions.mbstring", "php81Extensions.xml", "php81Ext
 
 [phases.build]
 cmds = [
+  "which php > .php_path && echo PHP path: $(which php) && php -v",
   "composer install --no-dev --no-scripts --no-interaction --optimize-autoloader",
   "npm install",
   "npm run production"
