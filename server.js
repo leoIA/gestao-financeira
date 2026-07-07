@@ -1,5 +1,5 @@
 const http = require('http');
-const { spawn } = require('child_process');
+const { spawn, execSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 
@@ -9,106 +9,80 @@ const APP_DIR = __dirname;
 
 // Find PHP binary
 function findPhp() {
-  const candidates = [
-    '/usr/bin/php83',
-    '/usr/bin/php8.3',
-    '/usr/bin/php82',
-    '/usr/bin/php8.2',
-    '/usr/bin/php81',
-    '/usr/bin/php8.1',
-    '/usr/bin/php',
-    'php83',
-    'php'
-  ];
+  const candidates = ['/usr/bin/php83', '/usr/bin/php8.3', '/usr/bin/php82', '/usr/bin/php8.1', '/usr/bin/php', 'php83', 'php'];
   for (const p of candidates) {
-    try {
-      require('child_process').execSync(p + ' -v', { stdio: 'ignore' });
-      return p;
-    } catch (e) {}
+    try { execSync(p + ' -v', { stdio: 'ignore' }); return p; } catch (e) {}
   }
   return 'php';
 }
 
 const phpBin = findPhp();
-console.log('Using PHP binary:', phpBin);
+console.log('PHP binary:', phpBin);
 
-// Setup .env if missing
+// Build .env from process.env (Hostinger injects env vars)
 const envFile = path.join(APP_DIR, '.env');
-const envExample = path.join(APP_DIR, '.env.example');
-if (!fs.existsSync(envFile)) {
-  if (fs.existsSync(envExample)) {
-    let env = fs.readFileSync(envExample, 'utf8');
-    env = env.replace('DB_CONNECTION=mysql', 'DB_CONNECTION=pgsql');
-    env = env.replace('DB_HOST=127.0.0.1', 'DB_HOST=aws-0-sa-east-1.pooler.supabase.com');
-    env = env.replace('DB_PORT=3306', 'DB_PORT=6543');
-    env = env.replace('DB_DATABASE=laravel', 'DB_DATABASE=postgres');
-    env = env.replace('DB_USERNAME=root', 'DB_USERNAME=postgres.cjthfxwmgmtahbbcfzio');
-    env = env.replace('DB_PASSWORD=', 'DB_PASSWORD=mm_construtora');
-    env = env.replace('APP_ENV=local', 'APP_ENV=production');
-    env = env.replace('APP_DEBUG=true', 'APP_DEBUG=false');
-    env = env.replace('APP_URL=http://localhost', 'APP_URL=https://beige-goshawk-642244.hostingersite.com');
-    fs.writeFileSync(envFile, env);
-    console.log('.env created from .env.example');
-  }
-}
+const envVars = {
+  APP_NAME: process.env.APP_NAME || 'GestaoFinanceira',
+  APP_ENV: process.env.APP_ENV || 'production',
+  APP_KEY: process.env.APP_KEY || '',
+  APP_DEBUG: process.env.APP_DEBUG || 'false',
+  APP_URL: process.env.APP_URL || 'https://beige-goshawk-642244.hostingersite.com',
+  LOG_CHANNEL: process.env.LOG_CHANNEL || 'stack',
+  DB_CONNECTION: process.env.DB_CONNECTION || 'pgsql',
+  DB_HOST: process.env.DB_HOST || 'aws-1-sa-east-1.pooler.supabase.com',
+  DB_PORT: process.env.DB_PORT || '5432',
+  DB_DATABASE: process.env.DB_DATABASE || 'postgres',
+  DB_USERNAME: process.env.DB_USERNAME || 'postgres.kqwyhwxtpqnrkxspcmbi',
+  DB_PASSWORD: process.env.DB_PASSWORD || 'mm_construtora',
+  BROADCAST_DRIVER: 'log',
+  CACHE_DRIVER: process.env.CACHE_DRIVER || 'file',
+  QUEUE_CONNECTION: process.env.QUEUE_CONNECTION || 'sync',
+  SESSION_DRIVER: process.env.SESSION_DRIVER || 'file',
+  SESSION_LIFETIME: '120'
+};
+
+let envContent = Object.entries(envVars).map(([k, v]) => k + '=' + v).join('\n');
+fs.writeFileSync(envFile, envContent + '\n');
+console.log('.env written');
 
 // Generate APP_KEY if missing
 try {
-  const envContent = fs.readFileSync(envFile, 'utf8');
-  if (!envContent.match(/APP_KEY=base64:/)) {
+  const current = fs.readFileSync(envFile, 'utf8');
+  if (!current.match(/APP_KEY=base64:/)) {
     console.log('Generating APP_KEY...');
-    const result = require('child_process').execSync(
-      phpBin + ' ' + path.join(APP_DIR, 'artisan') + ' key:generate --force',
-      { cwd: APP_DIR, encoding: 'utf8' }
-    );
-    console.log('APP_KEY result:', result);
+    const out = execSync(phpBin + ' ' + path.join(APP_DIR, 'artisan') + ' key:generate --force', { cwd: APP_DIR, encoding: 'utf8' });
+    console.log(out);
   }
-} catch (e) {
-  console.error('APP_KEY generation error:', e.message);
-}
+} catch(e) { console.error('APP_KEY error:', e.message); }
 
-// Fix storage permissions
+// Fix permissions
 try {
-  require('child_process').execSync('chmod -R 777 ' + path.join(APP_DIR, 'storage'), { stdio: 'ignore' });
-  require('child_process').execSync('chmod -R 777 ' + path.join(APP_DIR, 'bootstrap/cache'), { stdio: 'ignore' });
+  execSync('chmod -R 777 ' + path.join(APP_DIR, 'storage') + ' ' + path.join(APP_DIR, 'bootstrap/cache'));
+} catch(e) {}
+
+// Clear config cache
+try {
+  execSync(phpBin + ' ' + path.join(APP_DIR, 'artisan') + ' config:clear', { cwd: APP_DIR });
 } catch(e) {}
 
 // Start PHP built-in server
-const phpServer = spawn(phpBin, [
-  '-S', '127.0.0.1:' + PHP_PORT,
-  '-t', path.join(APP_DIR, 'public')
-], {
+const phpServer = spawn(phpBin, ['-S', '127.0.0.1:' + PHP_PORT, '-t', path.join(APP_DIR, 'public'), path.join(APP_DIR, 'public/index.php')], {
   cwd: APP_DIR,
-  env: { ...process.env, APP_DIR: APP_DIR }
+  env: Object.assign({}, process.env)
 });
+phpServer.stdout.on('data', d => process.stdout.write('[PHP] ' + d));
+phpServer.stderr.on('data', d => process.stderr.write('[PHP] ' + d));
+phpServer.on('exit', code => console.error('[PHP] exited:', code));
 
-phpServer.stdout.on('data', (d) => console.log('[PHP]', d.toString()));
-phpServer.stderr.on('data', (d) => console.log('[PHP]', d.toString()));
-phpServer.on('exit', (code) => console.error('[PHP] exited with code', code));
-
-// Wait for PHP to start then launch Node proxy
+// Node.js proxy -> PHP
 setTimeout(() => {
-  const proxy = http.createServer((req, res) => {
-    const options = {
-      hostname: '127.0.0.1',
-      port: PHP_PORT,
-      path: req.url,
-      method: req.method,
-      headers: req.headers
-    };
-    const proxyReq = http.request(options, (proxyRes) => {
-      res.writeHead(proxyRes.statusCode, proxyRes.headers);
-      proxyRes.pipe(res);
+  http.createServer((req, res) => {
+    const opts = { hostname: '127.0.0.1', port: PHP_PORT, path: req.url, method: req.method, headers: req.headers };
+    const pr = http.request(opts, (pres) => {
+      res.writeHead(pres.statusCode, pres.headers);
+      pres.pipe(res);
     });
-    proxyReq.on('error', (e) => {
-      console.error('Proxy error:', e.message);
-      res.writeHead(502);
-      res.end('Bad Gateway: ' + e.message);
-    });
-    req.pipe(proxyReq);
-  });
-
-  proxy.listen(PORT, '0.0.0.0', () => {
-    console.log('Node proxy listening on port', PORT, '-> PHP on', PHP_PORT);
-  });
-}, 2000);
+    pr.on('error', e => { res.writeHead(502); res.end('502: ' + e.message); });
+    req.pipe(pr);
+  }).listen(PORT, '0.0.0.0', () => console.log('Listening on', PORT, '-> PHP', PHP_PORT));
+}, 3000);
