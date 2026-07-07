@@ -7,125 +7,103 @@ const PORT = parseInt(process.env.PORT) || 3000;
 const PHP_PORT = 8001;
 const appDir = __dirname;
 
-console.log('=== Gestao Financeira Startup ===');
-console.log('App directory:', appDir);
-console.log('Node PORT:', PORT);
-console.log('PHP PORT:', PHP_PORT);
+console.log('=== SERVER STARTING PORT:', PORT, '===');
 
-// Create .env file
+// Create .env immediately
 const envPath = path.join(appDir, '.env');
-const envContent = 'APP_NAME=GestaoFinanceira\n'
-  + 'APP_ENV=production\n'
-  + 'APP_KEY=\n'
-  + 'APP_DEBUG=true\n'
-  + 'APP_URL=https://beige-goshawk-642244.hostingersite.com\n'
-  + '\n'
-  + 'LOG_CHANNEL=stderr\n'
-  + 'LOG_LEVEL=debug\n'
-  + '\n'
-  + 'DB_CONNECTION=pgsql\n'
-  + 'DB_HOST=aws-0-sa-east-1.pooler.supabase.com\n'
-  + 'DB_PORT=6543\n'
-  + 'DB_DATABASE=postgres\n'
-  + 'DB_USERNAME=postgres.kqwyhwxtpqnrkxspcmbi\n'
-  + 'DB_PASSWORD=mm_construtora\n'
-  + 'DB_SSLMODE=require\n'
-  + '\n'
-  + 'CACHE_DRIVER=file\n'
-  + 'FILESYSTEM_DISK=local\n'
-  + 'QUEUE_CONNECTION=sync\n'
-  + 'SESSION_DRIVER=file\n'
-  + 'SESSION_LIFETIME=120\n';
+const envContent = [
+  'APP_NAME=GestaoFinanceira',
+  'APP_ENV=production',
+  'APP_KEY=',
+  'APP_DEBUG=true',
+  'APP_URL=https://beige-goshawk-642244.hostingersite.com',
+  '',
+  'LOG_CHANNEL=stderr',
+  'LOG_LEVEL=debug',
+  '',
+  'DB_CONNECTION=pgsql',
+  'DB_HOST=aws-0-sa-east-1.pooler.supabase.com',
+  'DB_PORT=6543',
+  'DB_DATABASE=postgres',
+  'DB_USERNAME=postgres.kqwyhwxtpqnrkxspcmbi',
+  'DB_PASSWORD=mm_construtora',
+  'DB_SSLMODE=require',
+  '',
+  'CACHE_DRIVER=file',
+  'FILESYSTEM_DISK=local',
+  'QUEUE_CONNECTION=sync',
+  'SESSION_DRIVER=file',
+  'SESSION_LIFETIME=120',
+].join('\n');
 
-fs.writeFileSync(envPath, envContent);
-console.log('.env written.');
-
-// Fix storage permissions
 try {
-  execSync('chmod -R 777 ' + path.join(appDir, 'storage'), { stdio: 'pipe' });
-  execSync('chmod -R 777 ' + path.join(appDir, 'bootstrap/cache'), { stdio: 'pipe' });
-  execSync('php artisan storage:link --force', { cwd: appDir, stdio: 'pipe' });
-  console.log('Permissions OK.');
-} catch (e) {
-  console.log('Permission/storage warning:', e.message.substring(0,200));
+  fs.writeFileSync(envPath, envContent);
+  console.log('.env written OK');
+} catch(e) {
+  console.error('.env write error:', e.message);
 }
 
-// Generate APP_KEY
+// Fix permissions
 try {
-  const keyResult = execSync('php artisan key:generate --force --show', { cwd: appDir }).toString().trim();
-  console.log('APP_KEY result:', keyResult.substring(0,50));
-} catch (e) {
-  console.error('key:generate error:', e.stderr ? e.stderr.toString().substring(0,300) : e.message);
-}
+  execSync('chmod -R 777 storage bootstrap/cache', { cwd: appDir, stdio: 'pipe' });
+  console.log('chmod OK');
+} catch(e) { console.log('chmod warn:', e.message.substring(0,100)); }
 
-// Clear caches
+// Generate key
 try {
-  execSync('php artisan config:clear', { cwd: appDir, stdio: 'pipe' });
-  execSync('php artisan cache:clear', { cwd: appDir, stdio: 'pipe' });
-  console.log('Cache cleared.');
-} catch (e) {
-  console.log('Cache clear warning:', e.message.substring(0,100));
-}
+  execSync('php artisan key:generate --force', { cwd: appDir, stdio: 'pipe' });
+  console.log('key:generate OK');
+} catch(e) { console.error('key:generate ERR:', e.stderr ? e.stderr.toString().substring(0,200) : e.message); }
 
-// Start PHP artisan serve
-const php = spawn('php', ['artisan', 'serve', '--host=127.0.0.1', '--port=' + PHP_PORT, '--no-interaction'], {
+// Start PHP server
+const phpArgs = ['artisan', 'serve', '--host=127.0.0.1', '--port=' + PHP_PORT];
+console.log('Starting PHP:', phpArgs.join(' '));
+
+const php = spawn('php', phpArgs, {
   cwd: appDir,
-  env: Object.assign({}, process.env),
-  stdio: ['ignore', 'pipe', 'pipe']
+  env: process.env,
+  detached: false
 });
 
-php.stdout.on('data', d => console.log('[PHP]', d.toString().trim()));
-php.stderr.on('data', d => console.error('[PHP ERR]', d.toString().trim()));
+if (php.stdout) php.stdout.on('data', d => process.stdout.write('[PHP] ' + d));
+if (php.stderr) php.stderr.on('data', d => process.stderr.write('[PHP] ' + d));
+php.on('error', err => { console.error('PHP spawn error:', err); process.exit(1); });
+php.on('exit', code => { console.error('PHP exit:', code); });
 
-php.on('error', (err) => {
-  console.error('Failed to start PHP:', err);
-  process.exit(1);
-});
-
-php.on('exit', (code) => {
-  console.error('PHP exited with code:', code);
-  process.exit(code || 1);
-});
-
-// Proxy function with retry
-function proxyRequest(req, res, attempt) {
+// Start HTTP server IMMEDIATELY - don't wait for PHP
+const server = http.createServer((req, res) => {
+  if (req.url === '/health') {
+    res.writeHead(200, {'Content-Type': 'text/plain'});
+    res.end('OK');
+    return;
+  }
+  
   const options = {
     hostname: '127.0.0.1',
     port: PHP_PORT,
     path: req.url,
     method: req.method,
-    headers: Object.assign({}, req.headers, {
-      'X-Forwarded-For': req.socket.remoteAddress,
-      'X-Forwarded-Proto': 'https',
-      'Host': req.headers.host
-    })
+    headers: req.headers
   };
-  const proxy = http.request(options, (phpRes) => {
+  
+  const proxy = http.request(options, phpRes => {
     res.writeHead(phpRes.statusCode, phpRes.headers);
     phpRes.pipe(res, { end: true });
   });
-  proxy.on('error', (err) => {
-    if (attempt < 3) {
-      setTimeout(() => proxyRequest(req, res, attempt + 1), 500);
-    } else {
-      res.writeHead(502);
-      res.end('PHP unavailable: ' + err.message);
-    }
+  
+  proxy.on('error', err => {
+    res.writeHead(503, {'Content-Type': 'text/html'});
+    res.end('<h1>Starting...</h1><p>PHP not ready: ' + err.message + '</p><p><a href="/">Refresh</a></p>');
   });
+  
   req.pipe(proxy, { end: true });
-}
+});
 
-// Start Node proxy server after 3 seconds
-setTimeout(() => {
-  console.log('Starting Node proxy on port', PORT);
-  const server = http.createServer((req, res) => {
-    proxyRequest(req, res, 1);
-  });
-  server.listen(PORT, '0.0.0.0', () => {
-    console.log('Node proxy listening on port', PORT);
-  });
-  server.on('error', (err) => {
-    console.error('Server error:', err);
-    process.exit(1);
-  });
-}, 3000);
+server.listen(PORT, '0.0.0.0', () => {
+  console.log('HTTP server listening on port', PORT);
+});
+
+server.on('error', err => {
+  console.error('HTTP server error:', err);
+  process.exit(1);
+});
